@@ -1,0 +1,3 @@
+[submodule "vendor/edn-cpp"]
+	path = vendor/edn-cpp
+	url = https://github.com/shaunxcode/edn-cpp.git
