@@ -5,6 +5,7 @@
 #include <iostream>
 #include <sstream>
 #include <map>
+#include <stdio.h>
 #include <stdlib.h>
 #include <vector>
 
@@ -100,6 +101,7 @@ edn::EdnNode getEntity(std::string entity) {
 }
 
 edn::EdnNode transact(std::string transactString) {
+  if (verbose) std::cout << "TRANSACT: " << transactString << std::endl;
   char *txdata = curl_easy_escape(curl, transactString.c_str(), 0);
   std::string data = "tx-data=" + std::string(txdata);
   curl_free(txdata);
@@ -107,12 +109,29 @@ edn::EdnNode transact(std::string transactString) {
 }
 
 edn::EdnNode query(std::string queryString) {
+  if (verbose) std::cout << "QUERY: " << queryString << std::endl;
   char *query = curl_easy_escape(curl, queryString.c_str(), 0);
   char *args = curl_easy_escape(curl, std::string("[{:db/alias \"" + alias + "/" + db + "\"}]").c_str(), 0);
   std::string url = "api/query?q=" + std::string(query) + "&args=" + std::string(args);
   curl_free(query);
   curl_free(args);
   return request(GET, url);
+}
+
+std::string getJustNamespace(std::string ns) { 
+  if (ns[0] == ':') ns = ns.substr(1); 
+  return ns;
+}
+ 
+edn::EdnNode getAttributes(std::string ns) {
+  return query("[:find ?ident ?valueType ?cardinality "
+               " :where [?e :db/ident ?ident] "
+                      " [(namespace ?ident) ?ns] "
+                      " [(= ?ns \"" + getJustNamespace(ns) + "\")] "
+                      " [?e :db/valueType ?v] " 
+                      " [?v :db/ident ?valueType] " 
+                      " [?e :db/cardinality ?c] "
+                      " [?c :db/ident ?cardinality]]");  
 }
 
 std::map<std::string, std::string> args;
@@ -128,7 +147,64 @@ int quit(std::string msg = "") {
 }
 
 int help() {
-  return quit("commands: [query querystring] [entity id] [transact data] [aliases] [databases] [createDatabase name] [help]\n    args: [--alias | -a] [--db | -d] [--host | -h]  [--format | -f]"); 
+  return quit("commands: [query querystring]\n"
+              "            expects querystring to be well formed edn e.g. [:find ?n :where [_ :db/ident ?n]]\n"
+              "          [entity id]\n"
+              "            fetch all attributes stored against an entity\n"
+              "          [entities namespace]\n"
+              "            fetch all entities for a given namespace\n"
+              "          [idents namespace]\n"
+              "            fetch idents in enum for namespace\n"
+              "          [createIdent ident]\n"
+              "            adds ident e.g. :my.ns/my-ident\n"
+              "          [transact data]\n"
+              "            expects data to be well formed edn e.g. [{:db/id #db/id [:db.part/user -1] :some/attr :some-val}]\n"
+              "          [aliases]\n"
+              "            list all available aliases on REST service\n"
+              "          [databases]\n"
+              "            list all available databases for active alias\n"
+              "          [createDatabase name]\n"
+              "            create a new database\n"
+              "          [namespaces]\n"
+              "            see all namespaces in active db\n"
+              "          [namespace namespaceName]\n"
+              "            see all attributes for a namespace\n"
+              "          [createAttribute namespace]\n"
+              "            create a new attribute for the given namespace\n"
+              "          [createEntity namespaceName]\n"
+              "            prompt for creating an entity for attributes in a namespace\n"
+              "          [fns]\n"
+              "            list all functions\n"
+              "          [fnsInNamespace namespace]\n"
+              "            list all functions for namespace\n" 
+              "          [createFn]\n"  
+              "            prompt for creating a new fn\n"
+              "          [help]\n"
+              "            this information\n"
+              "    args: [--alias | -a]\n"
+              "            the name of the storage/alias as defined when starting REST service\n"
+              "          [--db | -d]\n"
+              "            the name of the database\n"
+              "          [--host | -h]\n"
+              "            the host of the datomic REST service\n"
+              "          [--format | -f]\n"
+              "            can be EDN JSON CSV or TSV\n"
+              "          [--path]\n"
+              "            expects well formed edn vector of integers for walking into a result from any command returning vector e.g. [0 0]"); 
+}
+
+bool validEdn(std::string val, std::string ednType, edn::EdnNode &node) {
+  if (ednType == ":db.type/string") {
+    node.value = val; 
+    node.type = edn::EdnString;
+  }
+ 
+  if (ednType == ":db.type/boolean" && edn::validBool(val)) {
+    node.value = val; 
+    node.type = edn::EdnBool;
+  } 
+
+  return true;
 }
 
 int main(int argc, char *argv[]) {
@@ -150,10 +226,10 @@ int main(int argc, char *argv[]) {
     } else if (arg == "--verbose") { 
       verbose = true;
       continue;
-    } else if (arg == "aliases" || arg == "databases") {
+    } else if (arg == "aliases" || arg == "databases" || arg == "namespaces" || arg == "fns" || arg == "createFn") {
       command = arg;
       continue;
-    } else if (arg == "query" || arg == "entity" || arg == "transact" || arg == "createDatabase") {
+    } else if (arg == "query" || arg == "entity" || arg == "transact" || arg == "createDatabase" || arg == "namespace" || arg == "createEntity" || arg == "fnsInNamespace" || arg == "entities" || arg == "idents" || arg == "createIdent") {
       command = arg;
     }
     if (i < argc - 1) { 
@@ -202,42 +278,128 @@ int main(int argc, char *argv[]) {
   else
     return quit("Error: no host provided via -h --host or set in env as DTM_HOST");
 
-  if (command == "aliases") {
-    printResult(getStorages());
-  }
-  if (command == "query") {
-    edn::EdnNode result = query(args.at("query"));
-    if (args.count("--path")) {
-      try { 
-        edn::EdnNode path = edn::read(args.at("--path"));
-        std::list<edn::EdnNode>::iterator it;
-        for (it = path.values.begin(); it != path.values.end(); ++it) {
-          if (it->type == edn::EdnInt) {
-            if (result.type == edn::EdnVector) { 
-              std::vector<edn::EdnNode> values(result.values.begin(), result.values.end()); 
-              result = values.at(atoi(it->value.c_str()));
-            } else {
-              return quit("attempted to access index " + it->value + " in a non-vector: " + result.value);
-            }
-          } else {
-            return quit("--path should only be vector of ints.");
-          }
-        }
-      } catch (const char* e) {
-        return quit("Error parsing path vector: " + std::string(e));
-      }
-    } 
-    printResult(result); 
-  } 
-  if (command == "databases") { 
-    printResult(getDatabases(alias));
-  }
-  if (command == "transact") {
-    printResult(transact(args.at("transact")));
-  }
-  if (command == "entity") {
-    printResult(getEntity(args.at("entity"))); 
+  edn::EdnNode result;
+
+  if (command == "aliases")
+    result = getStorages();
+
+  if (command == "namespace") {
+    result = getAttributes(args.at("namespace")); 
+    
   }
 
+  if (command == "namespaces") { 
+    result = query("[:find ?ns (count-distinct ?ns)"
+                   " :where [_ :db/ident ?name] "
+                          " [(namespace ?name) ?n] "
+                          " [(keyword ?n) ?ns]]");
+    std::list<edn::EdnNode>::iterator it;
+    result.values.pop_front();
+    for (it = result.values.begin(); it != result.values.end(); ++it) {
+      it->values.pop_back();
+    }
+  }
+
+  if (command == "fns") {
+    result = query("[:find ?fn :where [?f :db/fn _] [?f :db/ident ?fn]]");
+  }
+
+  if (command == "idents") {
+    result = query("[:find ?ident "
+                   " :where [_ :db/ident ?ident] "
+                          " [(namespace ?ident) ?ns] "
+                          " [(= ?ns \"" + getJustNamespace(args.at("idents")) + "\")]]");
+  } 
+
+  if (command == "createIdent") { 
+    std::string ident = args.at("createIdent");
+    if (ident[0] != ':') ident = ":" + ident; 
+    result = transact("[{:db/id #db/id [:db.part/db] :db/ident " + ident + "}]"); 
+  }
+
+  if (command == "entities") { 
+    edn::EdnNode attrs = getAttributes(args.at("entities"));
+    std::string findClause = "[:find ?e ";
+    std::string whereClause = ":where ";
+    std::list<edn::EdnNode>::iterator it;
+    std::string attrName;
+    int symCount = 0;
+    char findSym[10]; 
+    for (it = attrs.values.begin(); it != attrs.values.end(); ++it) {
+      attrName = it->values.front().value;
+      sprintf(findSym, "?%d", symCount); 
+      findClause += std::string(findSym) + " "; 
+      whereClause += " [?e " + attrName + " " + findSym + "]";
+      symCount++;
+    }
+    result = query(findClause + whereClause + "]"); 
+  }
+
+  if (command == "createEntity") {
+    result = getAttributes(args.at("createEntity")); 
+    std::list<edn::EdnNode>::iterator it;
+    
+    edn::EdnNode val;
+    std::string tx = "[{:db/id #db/id [:db.part/user -1]"; 
+    std::string input;
+    std::string attrName;
+    std::string attrType;
+    std::string attrCard;
+     
+    for (it = result.values.begin(); it != result.values.end(); ++it) { 
+      attrName = it->values.front().value; 
+      it->values.pop_front(); 
+      attrType = it->values.front().value;
+      it->values.pop_front();
+      attrCard = it->values.front().value; 
+
+      while (true) {  
+        std::cout << attrName << " (" + attrType + "): ";
+        std::getline (std::cin, input); 
+        if (validEdn(input, attrType, val)) { 
+          tx += " " + attrName + " " + edn::pprint(val);
+          break;
+        } else { 
+          std::cout << "Error validating " << attrType << std::endl; 
+        } 
+      }
+    }
+    result = transact(tx);
+  }
+
+  if (command == "query")
+    result = query(args.at("query"));
+
+  if (command == "databases")  
+    result = getDatabases(alias);
+
+  if (command == "transact") 
+    result = transact(args.at("transact"));
+
+  if (command == "entity") 
+    result = getEntity(args.at("entity")); 
+
+  if (args.count("--path")) {
+    try { 
+      edn::EdnNode path = edn::read(args.at("--path"));
+      std::list<edn::EdnNode>::iterator it;
+      for (it = path.values.begin(); it != path.values.end(); ++it) {
+        if (it->type == edn::EdnInt) {
+          if (result.type == edn::EdnVector) { 
+            std::vector<edn::EdnNode> values(result.values.begin(), result.values.end()); 
+            result = values.at(atoi(it->value.c_str()));
+          } else {
+            return quit("attempted to access index " + it->value + " in a non-vector: " + result.value);
+          }
+        } else {
+          return quit("--path should only be vector of ints.");
+        }
+      }
+    } catch (const char* e) {
+      return quit("Error parsing path vector: " + std::string(e));
+    }
+  } 
+
+  printResult(result); 
   return quit();
 }
