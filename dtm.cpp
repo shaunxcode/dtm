@@ -65,13 +65,22 @@ edn::EdnNode request(ReqTypes reqType, std::string url, std::string postData = "
 
   long responseCode;
   curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &responseCode);
+
   if (verbose) { 
     std::cout << "URL: " << fullHost << std::endl;
     std::cout << "RESPONSE CODE: " << responseCode << std::endl;
     std::cout << "DATA: " << data << std::endl;
   }
 
-  return edn::read(data);
+  if(responseCode == 500) { 
+    //parse out <title>{string we care about}</title>
+    size_t start = data.find("<title>") + 7; 
+    size_t stop = data.find("</title>") - 8; 
+    size_t len = stop - start; 
+    return edn::read("\"Problem with request: " + data.substr(start, len) + "\""); 
+  } else { 
+    return edn::read(data);
+  }
 }
 
 void printResult(edn::EdnNode result) {
@@ -250,7 +259,7 @@ int main(int argc, char *argv[]) {
     alias = args.at("-a");
   else if (envAlias != NULL) 
     alias = envAlias;
-  else
+  else if (command != "aliases")
     return quit("Error: no alias provided via -a --alias or set in env as DTM_ALIAS");
 
   if (args.count("--db"))
@@ -259,7 +268,7 @@ int main(int argc, char *argv[]) {
     db = args.at("-d");
   else if (envDb != NULL)
     db = envDb;
-  else
+  else if (command != "aliases" && command != "databases")
     return quit("Error: no db provided via -d --db or set in env as DTM_DB");
 
   if (args.count("--format"))
@@ -279,6 +288,8 @@ int main(int argc, char *argv[]) {
     host = envHost;
   else
     return quit("Error: no host provided via -h --host or set in env as DTM_HOST");
+
+  if (*host.rbegin() != '/') host += '/';
 
   edn::EdnNode result;
 
