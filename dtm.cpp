@@ -197,14 +197,16 @@ bool validEdn(std::string val, std::string ednType, edn::EdnNode &node) {
   if (ednType == ":db.type/string") {
     node.value = val; 
     node.type = edn::EdnString;
+    return true;
   }
  
   if (ednType == ":db.type/boolean" && edn::validBool(val)) {
     node.value = val; 
     node.type = edn::EdnBool;
+    return true;
   } 
 
-  return true;
+  return false;
 }
 
 int main(int argc, char *argv[]) {
@@ -364,7 +366,7 @@ int main(int argc, char *argv[]) {
         } 
       }
     }
-    result = transact(tx);
+    result = transact(tx + "}]");
   }
 
   if (command == "query")
