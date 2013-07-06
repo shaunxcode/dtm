@@ -33,7 +33,12 @@ std::string db;
 int queryLimit;
 int queryOffset;
 bool verbose;
+bool watchingEvents = false;
 CURL *curl;
+
+void printResult(edn::EdnNode result) {
+  std::cout << edn::pprint(result) << std::endl;
+}
 
 size_t writeCallback(char* buf, size_t size, size_t nmemb, void* up) {
   data = "";
@@ -41,8 +46,13 @@ size_t writeCallback(char* buf, size_t size, size_t nmemb, void* up) {
     data.push_back(buf[c]);
   }
 
-  if (verbose) 
-    std::cout << "GOT: " << data << std::endl;
+  if (watchingEvents && data.length() > 0 && !(data.length() == 1 && data[0] == ':')) {
+    try {
+      printResult(edn::read(data)); 
+    } catch (const char* e) {
+      printResult(edn::read("\"Invalid edn [" + std::string(e) + "] [" + data + "]\"")); 
+    }
+  }
 
   return size*nmemb;
 }
@@ -86,10 +96,6 @@ edn::EdnNode request(ReqTypes reqType, std::string url, std::string postData = "
   } else { 
     return edn::read(data);
   }
-}
-
-void printResult(edn::EdnNode result) {
-  std::cout << edn::pprint(result) << std::endl;
 }
 
 edn::EdnNode getStorages() {
@@ -338,6 +344,7 @@ int main(int argc, char *argv[]) {
     result = getAttributes(args.at("attributes"));  
 
   if (command == "events") {
+    watchingEvents = true;
     std::string url = "events/" + alias + "/" + db;
     request(GET, url, "", "Accept: text/event-stream");
     return quit("done");
