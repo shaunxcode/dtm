@@ -30,6 +30,8 @@ FormatTypes format;
 std::string host;
 std::string alias;
 std::string db;
+int queryLimit;
+int queryOffset;
 bool verbose;
 CURL *curl;
 
@@ -39,13 +41,16 @@ size_t writeCallback(char* buf, size_t size, size_t nmemb, void* up) {
     data.push_back(buf[c]);
   }
 
+  if (verbose) 
+    std::cout << "GOT: " << data << std::endl;
+
   return size*nmemb;
 }
 
-edn::EdnNode request(ReqTypes reqType, std::string url, std::string postData = "") {
+edn::EdnNode request(ReqTypes reqType, std::string url, std::string postData = "", std::string acceptHeader = "Accept: application/edn") {
   struct curl_slist *headers = NULL;
-  headers = curl_slist_append(headers, "Accept: application/edn");
-  
+  headers = curl_slist_append(headers, acceptHeader.c_str());
+
   if (reqType == POST) {
     curl_easy_setopt(curl, CURLOPT_POST, 1);
     if(postData.length()) {
@@ -162,9 +167,16 @@ int help() {
               "            fetch all attributes stored against an entity\n"
               "          [entities namespace]\n"
               "            fetch all entities for a given namespace\n"
+              "          [events]\n"
+              "            listens to and displays events for db.\n"
+              "          [with-event handler]\n"
+              "            listens for event (if --event-pattern is passed it filters on that) and then executes handler\n"
+              "          [datoms args]\n"
+              "            direct access to the datoms. args is well formed edn map.\n"
+              "            {:start :end :offset :limit :as-of :since :history}\n"
               "          [idents namespace]\n"
               "            fetch idents in enum for namespace\n"
-              "          [createIdent ident]\n"
+              "          [create-ident ident]\n"
               "            adds ident e.g. :my.ns/my-ident\n"
               "          [transact data]\n"
               "            expects data to be well formed edn e.g. [{:db/id #db/id [:db.part/user -1] :some/attr :some-val}]\n"
@@ -172,21 +184,21 @@ int help() {
               "            list all available aliases on REST service\n"
               "          [databases]\n"
               "            list all available databases for active alias\n"
-              "          [createDatabase name]\n"
+              "          [create-database name]\n"
               "            create a new database\n"
               "          [namespaces]\n"
               "            see all namespaces in active db\n"
-              "          [namespace namespaceName]\n"
+              "          [attributes namespace]\n"
               "            see all attributes for a namespace\n"
-              "          [createAttribute namespace]\n"
+              "          [create-ttribute namespace]\n"
               "            create a new attribute for the given namespace\n"
-              "          [createEntity namespaceName]\n"
+              "          [create-entity namespace ]\n"
               "            prompt for creating an entity for attributes in a namespace\n"
               "          [fns]\n"
               "            list all functions\n"
-              "          [fnsInNamespace namespace]\n"
+              "          [fns-in namespace]\n"
               "            list all functions for namespace\n" 
-              "          [createFn]\n"  
+              "          [create-fn]\n"  
               "            prompt for creating a new fn\n"
               "          [help]\n"
               "            this information\n"
@@ -199,7 +211,11 @@ int help() {
               "          [--format | -f]\n"
               "            can be EDN JSON CSV or TSV\n"
               "          [--path]\n"
-              "            expects well formed edn vector of integers for walking into a result from any command returning vector e.g. [0 0]"); 
+              "            expects well formed edn vector of integers for walking into a result from any command returning vector e.g. [0 0]\n"
+              "          [--offset]\n"
+              "            integer offset for dealing with large query results (.e.g which page of results where page is based on limit)\n"
+              "          [--limit]\n"
+              "            integer limit for dealing with large query results (number of records to see at a time)"); 
 }
 
 bool validEdn(std::string val, std::string ednType, edn::EdnNode &node) {
@@ -228,7 +244,7 @@ int main(int argc, char *argv[]) {
   char* envAlias = getenv("DTM_ALIAS");
   char* envDb = getenv("DTM_DB");
 
-    std::string arg;
+  std::string arg;
   std::string command;
   for (int i = 1; i < argc; ++i) {
     arg = std::string(argv[i]);
@@ -237,21 +253,43 @@ int main(int argc, char *argv[]) {
     } else if (arg == "--verbose") { 
       verbose = true;
       continue;
-    } else if (arg == "aliases" || arg == "databases" || arg == "namespaces" || arg == "fns" || arg == "createFn") {
+    } else if (arg == "aliases"    || arg == "databases" || 
+               arg == "namespaces" || arg == "fns"       ||
+               arg == "create-fn"  || arg == "events") {
       command = arg;
       continue;
-    } else if (arg == "query" || arg == "entity" || arg == "transact" || arg == "createDatabase" || arg == "namespace" || arg == "createEntity" || arg == "fnsInNamespace" || arg == "entities" || arg == "idents" || arg == "createIdent") {
+    } else if (arg == "query"      || arg == "entity"          || 
+               arg == "transact"   || arg == "create-database" || 
+               arg == "attributes" || arg == "create-entity  " || 
+               arg == "fns-in"     || arg == "entities"        || 
+               arg == "idents"     || arg == "create-ident"    || 
+               arg == "offset"     || arg == "limit") {
       command = arg;
     }
-    if (i < argc - 1) { 
+
+    if (i < argc - 1)
       args[arg] = std::string(argv[++i]);
-    } else {
-      command = "fail";
-      std::cout << "missing argument for " << arg << std::endl;
-    }
+    else
+      return quit("missing argument for " + arg);
   }
 
   if (!command.length()) return help();
+
+  if (args.count("--offset"))
+    if(edn::validInt(args.at("--offset"), false))
+      queryOffset = atoi(args.at("--offset").c_str());
+    else 
+      return quit("Invalid offset provided. unsigned int expected e.g. 5");  
+  else 
+    queryOffset = 0;
+
+  if (args.count("--limit"))
+    if (edn::validInt(args.at("--limit"), false))
+      queryLimit = atoi(args.at("--limit").c_str());
+    else
+      return quit("Invalid offset provides. unsigned int expected e.g. 5"); 
+  else 
+    queryLimit = -1;
 
   if (args.count("--alias")) 
     alias = args.at("--alias");
@@ -296,9 +334,13 @@ int main(int argc, char *argv[]) {
   if (command == "aliases")
     result = getStorages();
 
-  if (command == "namespace") {
-    result = getAttributes(args.at("namespace")); 
-    
+  if (command == "attributes")
+    result = getAttributes(args.at("attributes"));  
+
+  if (command == "events") {
+    std::string url = "events/" + alias + "/" + db;
+    request(GET, url, "", "Accept: text/event-stream");
+    return quit("done");
   }
 
   if (command == "namespaces") { 
@@ -324,8 +366,8 @@ int main(int argc, char *argv[]) {
                           " [(= ?ns \"" + getJustNamespace(args.at("idents")) + "\")]]");
   } 
 
-  if (command == "createIdent") { 
-    std::string ident = args.at("createIdent");
+  if (command == "create-ident") { 
+    std::string ident = args.at("create-ident");
     if (ident[0] != ':') ident = ":" + ident; 
     result = transact("[{:db/id #db/id [:db.part/db] :db/ident " + ident + "}]"); 
   }
@@ -348,8 +390,8 @@ int main(int argc, char *argv[]) {
     result = query(findClause + whereClause + "]"); 
   }
 
-  if (command == "createEntity") {
-    result = getAttributes(args.at("createEntity")); 
+  if (command == "create-entity") {
+    result = getAttributes(args.at("create-entity")); 
     std::list<edn::EdnNode>::iterator it;
     
     edn::EdnNode val;
