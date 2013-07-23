@@ -254,23 +254,10 @@ int main(int argc, char *argv[]) {
     result = DR::getEntity(args.at("entity")); 
 
   if (args.count("--path")) {
-    try { 
-      edn::EdnNode path = edn::read(args.at("--path"));
-      std::list<edn::EdnNode>::iterator it;
-      for (it = path.values.begin(); it != path.values.end(); ++it) {
-        if (it->type == edn::EdnInt) {
-          if (result.type == edn::EdnVector) { 
-            std::vector<edn::EdnNode> values(result.values.begin(), result.values.end()); 
-            result = values.at(atoi(it->value.c_str()));
-          } else {
-            return quit("attempted to access index " + it->value + " in a non-vector: " + result.value);
-          }
-        } else {
-          return quit("--path should only be vector of ints.");
-        }
-      }
+    try {
+      result = DR::atPath(args.at("--path"), result);      
     } catch (const char* e) {
-      return quit("Error parsing path vector: " + string(e));
+      return quit("Error with path: " + string(e));
     }
   } 
 
