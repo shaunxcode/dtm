@@ -213,6 +213,21 @@ namespace datomicRest {
     return transact("[" + retractions + "]");
   }
   
+  edn::EdnNode schema(string ns) {
+    return query("[:find ?val :where [ "
+    " ((fn [db] "
+		  " (map (fn [[attr]] "
+		        " (datomic.api/touch (datomic.api/entity db attr))) "
+		          " (datomic.api/q '[:find ?ident "
+		                            " :in $ ?in-ns "
+		                            " :where [?e :db/ident ?ident] "
+		                                  " [?e :db/valueType _] "
+		                                  " [(namespace ?ident) ?ns] "
+		                                  " [(= ?ns ?in-ns)]] " 
+                                      " db " + ns + "))) $) ?val]");
+		                             
+  }
+  
   edn::EdnNode query(string queryString) {
     if (verbose) cout << "QUERY: " << queryString << endl;
     if (verbose) cout << "CONN:  " << host << " | " << alias << " | " << db << endl;
